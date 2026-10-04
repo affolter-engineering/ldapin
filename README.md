@@ -202,9 +202,9 @@ The `blind-extract` mode recovers the value of any readable attribute one charac
 at a time by repeatedly probing with wildcard-suffix filters:
 
 ```text
-(&(uid=TARGET)(mail=a*))   → no entries
-(&(uid=TARGET)(mail=e*))   → entries found → 'e'
-(&(uid=TARGET)(mail=ei*))  → entries found → 'ei'
+(&(uid=TARGET)(mail=a*))   -> no entries
+(&(uid=TARGET)(mail=e*))   -> entries found -> 'e'
+(&(uid=TARGET)(mail=ei*))  -> entries found -> 'ei'
 ...
 ```
 
