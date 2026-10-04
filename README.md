@@ -158,8 +158,8 @@ ldapin -H ldap://ldap.forumsys.com -m both -o json
 
 The `login-bypass` mode probes an LDAP server for filter-injection vulnerabilities.
 It constructs 11 payloads derived from known LDAP injection techniques and reports
-which ones return entries — the same result a vulnerable web application would produce
-if it built its authentication filter from unsanitised user input.
+which ones return entries. The same result a vulnerable web application would produce
+if it built its authentication filter from not sanitized user input.
 
 ```bash
 # Probe with anonymous bind, any-user payloads
@@ -238,6 +238,10 @@ piping or `-o json` / `-o csv` use.
 ```bash
 ldapin -H ldap://ldap.forumsys.com -m blind-extract \
   -b dc=example,dc=com -u einstein --extract-attr mail
+
+ldapin -H ldap://ldap.forumsys.com -m blind-extract \
+  -b dc=example,dc=com -u einstein --extract-attr telephoneNumber \
+  --charset '0123456789-'
 ```
 
 ## Development
