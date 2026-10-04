@@ -36,7 +36,7 @@ nix build .
 cargo install --path .
 ```
 
-Requires OpenSSL development headers and `pkg-config` at build time.
+TLS is provided by Rustls, so no system OpenSSL installation is required.
 
 ## Usage
 
