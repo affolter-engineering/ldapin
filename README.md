@@ -36,8 +36,6 @@ nix build .
 cargo install --path .
 ```
 
-Requires OpenSSL development headers and `pkg-config` at build time.
-
 ## Usage
 
 ```text
