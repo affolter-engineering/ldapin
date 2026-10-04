@@ -166,7 +166,7 @@ ldapin -H ldap://target -m login-bypass -b dc=example,dc=com
 # Probe for a specific account
 ldapin -H ldap://target -m login-bypass -b dc=example,dc=com -u einstein
 
-# Active Directory — use sAMAccountName and unicodePwd
+# Active Directory. Use sAMAccountName and unicodePwd
 ldapin -H ldap://dc.corp -m login-bypass -b dc=corp,dc=local \
   --user-attr sAMAccountName --pass-attr unicodePwd -u administrator
 
