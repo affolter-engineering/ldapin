@@ -27,7 +27,7 @@ For Nix or NixOS users is a package available. Keep in mind that the latest rele
 be present in the ``unstable`` channel.
 
 ```bash
- $ nix-env -iA nixos.lapin
+nix-env -iA nixos.lapin
 ```
 
 From a local checkout:
