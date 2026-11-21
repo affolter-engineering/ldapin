@@ -24,7 +24,7 @@ nix build github:your-user/ldapin
 ```
 
 For Nix or NixOS users is a package available. Keep in mind that the latest releases might only
-be present in the ``unstable`` channel.
+be present in the `unstable` channel.
 
 ```bash
 nix-env -iA nixos.lapin
