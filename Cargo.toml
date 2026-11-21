@@ -3,6 +3,14 @@ name = "ldapin"
 version = "0.1.2"
 edition = "2024"
 description = "Discover valid LDAP fields from server schema"
+authors = ["Fabian Affolter <fabian.affolter@gmail.com>"]
+license = "MIT"
+repository = "https://github.com/fabaff/ldapin"
+homepage = "https://github.com/fabaff/ldapin"
+documentation = "https://docs.rs/ldapin"
+keywords = ["ldap", "schema", "discovery", "directory"]
+categories = ["command-line-utilities", "network-programming"]
+readme = "README.md"
 
 [dependencies]
 ldap3 = { version = "0.11", default-features = false, features = ["tls-rustls"] }
