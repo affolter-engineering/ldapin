@@ -1,11 +1,15 @@
 # ldapin
 
-A CLI tool that discovers valid LDAP fields by querying an LDAP server's subschema. It reads `attributeTypes` and `objectClasses` directly from the server, so the results always reflect what the server actually supports.
+A CLI tool that discovers valid LDAP fields by querying an LDAP server's
+subschema. It reads `attributeTypes` and `objectClasses` directly from
+the server, so the results always reflect what the server actually supports.
 
 ## Features
 
-- Lists all attribute types with OID, syntax, cardinality, aliases and description
-- Lists all object classes with kind (structural/auxiliary/abstract), required/optional attributes and superclass chain
+- Lists all attribute types with OID, syntax, cardinality, aliases
+  and description
+- Lists all object classes with kind (structural/auxiliary/abstract),
+  required/optional attributes and superclass chain
 - Substring filter on name or description
 - Three output formats: table, JSON, CSV
 - Anonymous and authenticated (simple) bind
@@ -23,8 +27,8 @@ nix run github:your-user/ldapin
 nix build github:your-user/ldapin
 ```
 
-For Nix or NixOS users is a package available. Keep in mind that the latest releases might only
-be present in the `unstable` channel.
+For Nix or NixOS users is a package available. Keep in mind that the
+latest releases might only be present in the `unstable` channel.
 
 ```bash
 nix-env -iA nixos.lapin
@@ -113,7 +117,8 @@ ldapin -H ldap://ldap.example.org --starttls -D 'cn=admin,dc=example,dc=org' -W
 
 ## Testing with the ForumSys public LDAP server
 
-[ForumSys](https://www.forumsys.com/2022/05/10/online-ldap-test-server/) provides a free, read-only LDAP server suitable for testing.
+[ForumSys](https://www.forumsys.com/2022/05/10/online-ldap-test-server/)
+provides a free, read-only LDAP server suitable for testing.
 
 | Parameter | Value |
 |---|---|
