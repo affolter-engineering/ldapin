@@ -515,7 +515,7 @@ fn print_bypass_results(results: Vec<BypassResult>, fmt: &OutputFormat) -> Resul
         OutputFormat::Table => {
             use comfy_table::{presets::UTF8_FULL, Cell, Color, Table};
             let mut table = Table::new();
-            table.load_preset(UTF8_FULL);
+            table.load_style(UTF8_FULL);
             table.set_header(["Payload", "Vulnerable", "Entries", "Filter", "Description"]);
             for r in &results {
                 let vuln_cell = if r.vulnerable {
@@ -908,7 +908,7 @@ fn print_attributes(attrs: Vec<AttributeInfo>, fmt: &OutputFormat) -> Result<()>
         OutputFormat::Table => {
             use comfy_table::{presets::UTF8_FULL, Table};
             let mut table = Table::new();
-            table.load_preset(UTF8_FULL);
+            table.load_style(UTF8_FULL);
             table.set_header(["Name", "OID", "Syntax", "Single", "Aliases", "Description"]);
             for a in &attrs {
                 table.add_row([
@@ -948,7 +948,7 @@ fn print_object_classes(ocs: Vec<ObjectClassInfo>, fmt: &OutputFormat) -> Result
         OutputFormat::Table => {
             use comfy_table::{presets::UTF8_FULL, Table};
             let mut table = Table::new();
-            table.load_preset(UTF8_FULL);
+            table.load_style(UTF8_FULL);
             table.set_header(["Name", "OID", "Kind", "SUP", "MUST", "MAY", "Description"]);
             for o in &ocs {
                 table.add_row([
